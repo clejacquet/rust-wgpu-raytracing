@@ -16,6 +16,7 @@ mod resources;
 mod texture;
 
 use model::{DrawModel, ScreenVertex, Vertex};
+use std::rc::Rc;
 
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
@@ -360,11 +361,11 @@ struct State {
     screen_vbo: wgpu::Buffer,
     screen_texture: texture::Texture,
     depth_texture: texture::Texture,
-    window: Window,
+    window: Rc<Window>,
 }
 
 impl State {
-    async fn new(window: Window) -> Self {
+    async fn new(window: Rc<Window>) -> Self {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -379,7 +380,7 @@ impl State {
         //
         // The surface needs to live as long as the window that created it.
         // State owns the window so this should be safe.
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        let surface = unsafe { instance.create_surface(window.as_ref()) }.unwrap();
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -961,6 +962,8 @@ pub async fn run() {
         .build(&event_loop)
         .unwrap();
 
+    let window_rc = Rc::new(window);
+
     #[cfg(target_arch = "wasm32")]
     {
         let get_full_size = || {
@@ -978,22 +981,38 @@ pub async fn run() {
         // Winit prevents sizing with CSS, so we have to set
         // the size manually when on web.
         use winit::dpi::PhysicalSize;
-        window.set_inner_size(get_full_size());
+        window_rc.set_inner_size(get_full_size());
 
         use winit::platform::web::WindowExtWebSys;
         web_sys::window()
             .and_then(|win| win.document())
             .and_then(|doc| {
                 let dst = doc.get_element_by_id("wasm-example")?;
-                let canvas = web_sys::Element::from(window.canvas());
+                let canvas = web_sys::Element::from(window_rc.canvas());
                 dst.append_child(&canvas).ok()?;
                 Some(())
             })
             .expect("Couldn't append canvas to document body.");
+
+        // resize of our winit::Window whenever the browser window changes size.
+        {
+            let window_closure_ref = window_rc.clone();
+            let closure = wasm_bindgen::closure::Closure::wrap(Box::new(move |e: web_sys::Event| {
+                let size = get_full_size();
+
+                window_closure_ref.set_inner_size(size)
+            }) as Box<dyn FnMut(_)>);
+
+            let win = web_sys::window().unwrap();
+
+            win.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref())
+                .unwrap();
+            closure.forget();
+        }
     }
 
     // State::new uses async code, so we're going to wait for it to finish
-    let mut state = State::new(window).await;
+    let mut state = State::new(window_rc.clone()).await;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
