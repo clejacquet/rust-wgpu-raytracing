@@ -25,6 +25,8 @@ struct HitRecord {
 
 var<private> kNoHit : HitRecord = HitRecord(false, 0.0f, vec3<f32>(0.0f, 0.0f, 0.0f));
 
+var<private> kLightDir : vec3<f32> = vec3<f32>(1.0f, -5.0f, 1.0f);
+
 @group(0) @binding(1)
 var<uniform> camera: Camera;
 
@@ -103,9 +105,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var final_color = vec4<f32>(0.0f, 0.0f, 0.0f, 1.0f);
 
     if (hit_record.hit) {
-        let diffuse = abs(dot(hit_record.normal, ray.direction));
+        let ambiant_comp = 0.1f;
+        let diffuse_comp = 1.0f;
+        let specular_comp = 0.5f;
 
-        final_color = vec4<f32>(diffuse, 0.0f, 0.0f, 1.0f);
+        let diffuse = diffuse_comp * max(0.0f, dot(hit_record.normal, -normalize(kLightDir)));
+
+        let half_dir = normalize(-normalize(kLightDir) - ray.direction);
+        let specular = specular_comp * pow(max(0.0f, dot(half_dir, hit_record.normal)), 32.0f);
+
+        let mat_color = vec3<f32>(1.0f, 0.0f, 0.0f);
+
+        let diffuse_color = vec4<f32>((ambiant_comp + diffuse) * mat_color, 1.0f);
+        let specular_color = vec4<f32>(specular * vec3<f32>(1.0f), 1.0f);
+
+        final_color = diffuse_color + specular_color;
     }
 
     textureStore(output, vec2<u32>(global_id.x, global_id.y), final_color);
