@@ -33,6 +33,9 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
     0.0, 0.0, 0.5, 1.0,
 );
 
+const TEXTURE_WIDTH: i32 = 16;
+const TEXTURE_HEIGHT: i32 = 16;
+
 const VERTICES: &[ScreenVertex] = &[
     ScreenVertex {
         position: [-1.0, -1.0, 0.0],
@@ -356,8 +359,8 @@ impl State {
         });
 
         let screen = Screen {
-            width: config.width,
-            height: config.height,
+            width: TEXTURE_WIDTH as u32,
+            height: TEXTURE_HEIGHT as u32,
         };
 
         let screen_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -497,8 +500,8 @@ impl State {
 
         let screen_texture = Texture::create_empty_texture(
             wgpu::Extent3d {
-                width: size.width,
-                height: size.height,
+                width: TEXTURE_WIDTH as u32,
+                height: TEXTURE_HEIGHT as u32,
                 depth_or_array_layers: 1,
             },
             wgpu::TextureFormat::Rgba8Unorm,
@@ -661,8 +664,8 @@ impl State {
 
             self.screen_texture = Texture::create_empty_texture(
                 wgpu::Extent3d {
-                    width: new_size.width,
-                    height: new_size.height,
+                    width: TEXTURE_WIDTH as u32,
+                    height: TEXTURE_HEIGHT as u32,
                     depth_or_array_layers: 1,
                 },
                 wgpu::TextureFormat::Rgba8Unorm,
@@ -707,8 +710,8 @@ impl State {
                 });
 
             let screen = Screen {
-                width: new_size.width,
-                height: new_size.height,
+                width: TEXTURE_WIDTH as u32,
+                height: TEXTURE_HEIGHT as u32,
             };
 
             self.queue
@@ -771,7 +774,7 @@ impl State {
 
             compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
             compute_pass.set_pipeline(&self.compute_pipeline);
-            compute_pass.dispatch_workgroups(self.size.width, self.size.height, 1);
+            compute_pass.dispatch_workgroups(TEXTURE_WIDTH as u32, TEXTURE_HEIGHT as u32, 1);
         }
 
         {
