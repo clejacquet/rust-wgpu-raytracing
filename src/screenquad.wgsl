@@ -103,6 +103,45 @@ fn cubic(p: vec2<f32>, texture_size: vec2<u32>) -> vec4<f32> {
     return _cubic_base(p.y - f32(i_y1), v_0, v_1, v_2, v_3);
 }
 
+fn _cubic_fast_base(v: f32) -> vec4<f32> {
+    let n = vec4<f32>(1.0, 2.0, 3.0, 4.0) - v;
+    let s = n * n * n;
+    let x = s.x;
+    let y = s.y - 4.0f * s.x;
+    let z = s.z - 4.0f * s.y + 6.0f * s.x;
+    let w = 6.0f - x - y - z;
+    return vec4<f32>(x, y, z, w) * (1.0f / 6.0f);
+}
+
+fn cubic_fast(p: vec2<f32>, texture_size: vec2<u32>) -> vec4<f32>{
+    let invTexSize = 1.0f / vec2<f32>(texture_size);
+
+    let fxy = fract(p);
+    var p = p - fxy;
+
+    let xcubic = _cubic_fast_base(fxy.x);
+    let ycubic = _cubic_fast_base(fxy.y);
+
+    let c = p.xxyy + vec2<f32>(-0.5f, 1.5f).xyxy;
+    
+    let s = vec4(xcubic.xz + xcubic.yw, ycubic.xz + ycubic.yw);
+    var offset = c + vec4<f32>(xcubic.yw, ycubic.yw) / s;
+    
+    offset *= invTexSize.xxyy;
+    
+    let sample0 = textureSample(t_diffuse, s_diffuse, offset.xz);
+    let sample1 = textureSample(t_diffuse, s_diffuse, offset.yz);
+    let sample2 = textureSample(t_diffuse, s_diffuse, offset.xw);
+    let sample3 = textureSample(t_diffuse, s_diffuse, offset.yw);
+
+    let sx = s.x / (s.x + s.y);
+    let sy = s.z / (s.z + s.w);
+
+    return mix(
+       mix(sample3, sample2, sx), mix(sample1, sample0, sx)
+    , sy);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let texture_size = textureDimensions(t_diffuse);
@@ -115,6 +154,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // return nearest(vec2<i32>(i_x, i_y));
     // return linear(vec2<f32>(p_x, p_y), texture_size);
     return cubic(vec2<f32>(p_x, p_y), texture_size);
+    // return cubic_fast(vec2<f32>(p_x, p_y), texture_size);
 
     // return textureSample(t_diffuse, s_diffuse, in.tex_coords);
 }
