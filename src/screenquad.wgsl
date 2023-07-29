@@ -59,6 +59,50 @@ fn linear(p: vec2<f32>, texture_size: vec2<u32>) -> vec4<f32> {
     return final_val;
 }
 
+fn _cubic_base(p: f32, v_0: vec4<f32>, v_1: vec4<f32>, v_2: vec4<f32>, v_3: vec4<f32>) -> vec4<f32> {
+    let f0 = v_1;
+    let f1 = v_2;
+    let d0 = (v_2 - v_0) / 2.0f;
+    let d1 = (v_3 - v_1) / 2.0f;
+
+    let a = 2.0f * f0 - 2.0f * f1 + d0 + d1;
+    let b = -3.0f * f0 + 3.0f * f1 - 2.0f * d0 - d1;
+    let c = d0;
+    let d = f0;
+
+    let x = p - floor(p);
+
+    return a * pow(x, 3.0f) + b * pow(x, 2.0f) + c * x + d;
+}
+
+fn _cubic1dx(p: f32, i_y: i32, texture_size: vec2<u32>) -> vec4<f32> {
+    let i_x0 = clamp(i32(floor(p)) - 1, 0, i32(texture_size.x) - 1);
+    let i_x1 = clamp(i32(floor(p)), 0, i32(texture_size.x) - 1);
+    let i_x2 = clamp(i32(ceil(p)), 0, i32(texture_size.x) - 1);
+    let i_x3 = clamp(i32(ceil(p)) + 1, 0, i32(texture_size.x) - 1);
+
+    let v_0 = textureLoad(t_diffuse, vec2<i32>(i_x0, i_y), 0);
+    let v_1 = textureLoad(t_diffuse, vec2<i32>(i_x1, i_y), 0);
+    let v_2 = textureLoad(t_diffuse, vec2<i32>(i_x2, i_y), 0);
+    let v_3 = textureLoad(t_diffuse, vec2<i32>(i_x3, i_y), 0);
+
+    return _cubic_base(p - f32(i_x1), v_0, v_1, v_2, v_3);
+} 
+
+fn cubic(p: vec2<f32>, texture_size: vec2<u32>) -> vec4<f32> {
+    let i_y0 = clamp(i32(floor(p.y)) - 1, 0, i32(texture_size.y) - 1);
+    let i_y1 = clamp(i32(floor(p.y)), 0, i32(texture_size.y) - 1);
+    let i_y2 = clamp(i32(ceil(p.y)), 0, i32(texture_size.y) - 1);
+    let i_y3 = clamp(i32(ceil(p.y)) + 1, 0, i32(texture_size.y) - 1);
+
+    let v_0 = _cubic1dx(p.x, i_y0, texture_size);
+    let v_1 = _cubic1dx(p.x, i_y1, texture_size);
+    let v_2 = _cubic1dx(p.x, i_y2, texture_size);
+    let v_3 = _cubic1dx(p.x, i_y3, texture_size);
+
+    return _cubic_base(p.y - f32(i_y1), v_0, v_1, v_2, v_3);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let texture_size = textureDimensions(t_diffuse);
@@ -70,7 +114,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // return nearest(vec2<i32>(i_x, i_y));
     // return linear(vec2<f32>(p_x, p_y), texture_size);
+    return cubic(vec2<f32>(p_x, p_y), texture_size);
 
-    return textureSample(t_diffuse, s_diffuse, in.tex_coords);
-    // return vec4<f32>(in.tex_coords, 0.0, 1.0);
+    // return textureSample(t_diffuse, s_diffuse, in.tex_coords);
 }
