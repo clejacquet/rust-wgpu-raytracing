@@ -1,5 +1,11 @@
 @group(0) @binding(0)
-var output: texture_storage_2d<rgba8unorm,write>; // this is used as both input and output for convenience
+var color_output: texture_storage_2d<rgba8unorm, write>; // this is used as both input and output for convenience
+
+@group(0) @binding(1)
+var depth_input: texture_2d<f32>; // this is used as both input and output for convenience
+
+@group(0) @binding(2)
+var depth_output: texture_storage_2d<r32float, write>; // this is used as both input and output for convenience
 
 struct Camera {
     viewmodel_inv: mat4x4<f32>,
@@ -10,6 +16,11 @@ struct Camera {
 struct Screen {
     width: u32,
     height: u32,
+}
+
+struct Sphere {
+    center: vec3<f32>,
+    radius: f32,
 }
 
 struct Ray {
@@ -24,20 +35,29 @@ struct HitRecord {
 }
 
 var<private> kNoHit : HitRecord = HitRecord(false, 0.0f, vec3<f32>(0.0f, 0.0f, 0.0f));
+var<private> kNear : f32 = 0.01;
+var<private> kFar : f32 = 100.0;
 
 var<private> kLightDir : vec3<f32> = vec3<f32>(1.0f, -5.0f, 1.0f);
 
-@group(0) @binding(1)
+@group(0) @binding(3)
 var<uniform> camera: Camera;
 
-@group(0) @binding(2)
+@group(0) @binding(4)
 var<uniform> screen: Screen;
+
+@group(0) @binding(5)
+var<uniform> sphere: Sphere;
 
 fn buildHitRecordAtIntersection(ray: Ray, center: vec3<f32>, intersection_t: f32) -> HitRecord {
     let intersection_point = ray.origin + ray.direction * intersection_t;
     let normal = normalize(intersection_point - center);
 
     return HitRecord(true, intersection_t, normal);
+}
+
+fn toNonLinearDepth(depth: f32) -> f32 {
+    return ((1.0 / depth) - (1.0 / kNear)) / ((1.0 / kFar) - (1.0 / kNear));
 }
 
 fn sphereRayIntersect(center: vec3<f32>, radius: f32, ray: Ray) -> HitRecord {
@@ -94,17 +114,27 @@ fn pixelToRay_ortho(x: u32, y: u32) -> Ray {
 @compute
 @workgroup_size(1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if (global_id.x >= screen.width || global_id.y >= screen.height || global_id.z >= 1u) {
-        return;
-    }
+    // if (global_id.x >= screen.width || global_id.y >= screen.height || global_id.z >= 1u) {
+    //     return;
+    // }
 
     let ray = pixelToRay(global_id.x, global_id.y);
 
-    let hit_record = sphereRayIntersect(vec3<f32>(1.0f, 0.5f, -3.0f), 2.0f, ray);
+    let hit_record = sphereRayIntersect(sphere.center, sphere.radius, ray);
 
     var final_color = vec4<f32>(0.0f, 0.0f, 0.0f, 1.0f);
 
+
     if (hit_record.hit) {
+        // Custom depth testing
+        let current_depth = 1.0 - textureLoad(depth_input, global_id.xy, 0).r;
+        let depth = toNonLinearDepth(hit_record.distance);
+
+        if (depth >= current_depth) {
+            return;
+        }
+
+        // Shading
         let ambiant_comp = 0.1f;
         let diffuse_comp = 1.0f;
         let specular_comp = 0.5f;
@@ -120,7 +150,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let specular_color = vec4<f32>(specular * vec3<f32>(1.0f), 1.0f);
 
         final_color = diffuse_color + specular_color;
-    }
+        //
 
-    textureStore(output, vec2<u32>(global_id.x, global_id.y), final_color);
+        textureStore(depth_output, vec2<u32>(global_id.x, global_id.y), vec4<f32>(1.0 - depth, 0.0, 0.0, 0.0));
+        textureStore(color_output, vec2<u32>(global_id.x, global_id.y), final_color);
+    }
 }

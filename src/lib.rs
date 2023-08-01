@@ -2,11 +2,12 @@ mod camera;
 mod camera_control;
 mod circle_camera_control;
 mod model;
+mod models;
 mod resources;
 mod texture;
 
-use std::iter;
 use std::rc::Rc;
+use std::{convert::TryInto, iter};
 
 use cgmath::prelude::*;
 use wgpu::util::DeviceExt;
@@ -23,6 +24,7 @@ use camera::Camera;
 use camera_control::CameraController;
 use circle_camera_control::CircleCameraController;
 use model::ScreenVertex;
+use models::sphere::Sphere;
 use texture::Texture;
 
 #[rustfmt::skip]
@@ -219,8 +221,8 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    compute_pipeline: wgpu::ComputePipeline,
-    obj_model: Model,
+    // compute_pipeline: wgpu::ComputePipeline,
+    // obj_model: Model,
     camera: Camera,
     camera_controller: Box<dyn CameraController>,
     camera_uniform: CameraUniform,
@@ -228,16 +230,21 @@ struct State {
     camera_buffer: wgpu::Buffer,
     camera_inv_buffer: wgpu::Buffer,
     screen_buffer: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
-    compute_bind_group_layout: wgpu::BindGroupLayout,
+    // camera_bind_group: wgpu::BindGroup,
+    sphere: Sphere,
+    sphere_front: Sphere,
+    // compute_bind_group_layout: wgpu::BindGroupLayout,
     compute_bind_group: wgpu::BindGroup,
+    compute_bind_group_front: wgpu::BindGroup,
+    compute_clear_buffer: wgpu::Buffer,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     screen_texture_bind_group: wgpu::BindGroup,
     // instances: Vec<Instance>,
     // instance_buffer: wgpu::Buffer,
     screen_vbo: wgpu::Buffer,
     screen_texture: Texture,
-    depth_texture: Texture,
+    depth_texture_input: Texture,
+    depth_texture_output: Texture,
     window: Rc<Window>,
 }
 
@@ -365,42 +372,13 @@ impl State {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let compute_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-                label: Some("compute_bind_group_layout"),
-            });
+        let compute_clear_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Compute Clear Buffer"),
+            contents: vec![0; (32 * config.width * config.height) as usize]
+                .into_boxed_slice()
+                .as_ref(),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
+        });
 
         let mut camera_uniform = CameraUniform::new();
         camera_uniform.update_view_proj(&camera);
@@ -481,12 +459,32 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("screenquad.wgsl").into()),
         });
 
-        let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("compute.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("compute.wgsl").into()),
-        });
+        let depth_texture_input = Texture::create_empty_texture(
+            wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            wgpu::TextureFormat::R32Float,
+            &device,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            "depth_texture_input",
+        );
 
-        let depth_texture = Texture::create_depth_texture(&device, &config, "depth_texture");
+        let depth_texture_output = Texture::create_empty_texture(
+            wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            wgpu::TextureFormat::R32Float,
+            &device,
+            wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            "depth_texture_output",
+        );
 
         let screen_vbo = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -502,7 +500,9 @@ impl State {
             },
             wgpu::TextureFormat::Rgba8Unorm,
             &device,
-            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
             "screen_texture",
         );
 
@@ -521,8 +521,28 @@ impl State {
             label: Some("screen_texture_bind_group"),
         });
 
+        let sphere = Sphere::new(
+            &device,
+            0.4,
+            cgmath::Vector3 {
+                x: 0.6,
+                y: 0.5,
+                z: -4.0,
+            },
+        );
+
+        let sphere_front = Sphere::new(
+            &device,
+            0.4,
+            cgmath::Vector3 {
+                x: 0.4,
+                y: 0.4,
+                z: -3.0,
+            },
+        );
+
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &compute_bind_group_layout,
+            layout: sphere.get_bind_group_layout(),
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -530,14 +550,57 @@ impl State {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: camera_inv_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(&depth_texture_input.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&depth_texture_output.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: camera_inv_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
                     resource: screen_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: sphere.get_buffer().as_entire_binding(),
                 },
             ],
             label: Some("compute_bind_group"),
+        });
+
+        let compute_bind_group_front = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: sphere_front.get_bind_group_layout(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&screen_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&depth_texture_input.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&depth_texture_output.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: camera_inv_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: screen_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: sphere_front.get_buffer().as_entire_binding(),
+                },
+            ],
+            label: Some("compute_bind_group_front"),
         });
 
         let render_pipeline_layout =
@@ -600,20 +663,6 @@ impl State {
             multiview: None,
         });
 
-        let compute_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("compute_pipeline_layout"),
-                bind_group_layouts: &[&compute_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-
-        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("compute_pipeline"),
-            layout: Some(&compute_pipeline_layout),
-            entry_point: "main",
-            module: &compute_shader,
-        });
-
         Self {
             surface,
             device,
@@ -621,22 +670,28 @@ impl State {
             config,
             size,
             render_pipeline,
-            compute_pipeline,
+            // compute_pipeline,
             // obj_model,
             camera,
             camera_controller,
             camera_buffer,
             camera_inv_buffer,
             screen_buffer,
-            camera_bind_group,
-            compute_bind_group_layout,
+            // camera_bind_group,
+            sphere,
+            sphere_front,
+            // compute_bind_group_layout,
             compute_bind_group,
+            compute_bind_group_front,
+            compute_clear_buffer,
             texture_bind_group_layout,
             screen_texture_bind_group,
             camera_uniform,
             camera_inv_uniform,
             // instances,
             // instance_buffer,
+            depth_texture_input,
+            depth_texture_output,
             screen_vbo,
             screen_texture,
             window,
@@ -654,8 +709,43 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.depth_texture =
-                Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+
+            self.depth_texture_input = Texture::create_empty_texture(
+                wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+                wgpu::TextureFormat::R32Float,
+                &self.device,
+                wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                "depth_texture_input",
+            );
+
+            self.depth_texture_output = Texture::create_empty_texture(
+                wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+                wgpu::TextureFormat::R32Float,
+                &self.device,
+                wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                "depth_texture_output",
+            );
+
+            self.compute_clear_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Compute Clear Buffer"),
+                        contents: vec![0; (32 * self.config.width * self.config.height) as usize]
+                            .into_boxed_slice()
+                            .as_ref(),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
+                    });
 
             self.screen_texture = Texture::create_empty_texture(
                 wgpu::Extent3d {
@@ -665,28 +755,11 @@ impl State {
                 },
                 wgpu::TextureFormat::Rgba8Unorm,
                 &self.device,
-                wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                wgpu::TextureUsages::STORAGE_BINDING
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
                 "screen_texture",
             );
-
-            self.compute_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.compute_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&self.screen_texture.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.camera_inv_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: self.screen_buffer.as_entire_binding(),
-                    },
-                ],
-                label: Some("compute_bind_group"),
-            });
 
             self.screen_texture_bind_group =
                 self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -702,6 +775,77 @@ impl State {
                         },
                     ],
                     label: Some("screen_texture_bind_group"),
+                });
+
+            self.compute_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: self.sphere.get_bind_group_layout(),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&self.screen_texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self.depth_texture_input.view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self.depth_texture_output.view,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.camera_inv_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.screen_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: self.sphere.get_buffer().as_entire_binding(),
+                    },
+                ],
+                label: Some("compute_bind_group"),
+            });
+
+            self.compute_bind_group_front =
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: self.sphere_front.get_bind_group_layout(),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.screen_texture.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &self.depth_texture_input.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(
+                                &self.depth_texture_output.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: self.camera_inv_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: self.screen_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: self.sphere_front.get_buffer().as_entire_binding(),
+                        },
+                    ],
+                    label: Some("compute_bind_group_front"),
                 });
 
             let screen = Screen {
@@ -763,13 +907,129 @@ impl State {
             });
 
         {
+            let src_copy_buffer = wgpu::ImageCopyBuffer {
+                buffer: &self.compute_clear_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(32 * self.config.width),
+                    rows_per_image: Some(self.config.height),
+                },
+            };
+
+            let dst_copy_texture = wgpu::ImageCopyTexture {
+                texture: &self.screen_texture.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            };
+
+            encoder.copy_buffer_to_texture(
+                src_copy_buffer,
+                dst_copy_texture,
+                wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        {
+            let src_copy_buffer = wgpu::ImageCopyBuffer {
+                buffer: &self.compute_clear_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(32 * self.config.width),
+                    rows_per_image: Some(self.config.height),
+                },
+            };
+
+            let dst_copy_texture = wgpu::ImageCopyTexture {
+                texture: &self.depth_texture_input.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            };
+
+            encoder.copy_buffer_to_texture(
+                src_copy_buffer,
+                dst_copy_texture,
+                wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        {
+            let src_copy_buffer = wgpu::ImageCopyBuffer {
+                buffer: &self.compute_clear_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(32 * self.config.width),
+                    rows_per_image: Some(self.config.height),
+                },
+            };
+
+            let dst_copy_texture = wgpu::ImageCopyTexture {
+                texture: &self.depth_texture_output.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            };
+
+            encoder.copy_buffer_to_texture(
+                src_copy_buffer,
+                dst_copy_texture,
+                wgpu::Extent3d {
+                    width: self.config.width,
+                    height: self.config.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Compute Pass"),
             });
 
             compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
-            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_pipeline(self.sphere.get_pipeline());
             compute_pass.dispatch_workgroups(self.size.width, self.size.height, 1);
+        }
+        {
+            let src_image_copy = wgpu::ImageCopyTexture {
+                texture: &self.depth_texture_output.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            };
+
+            let dst_image_copy = wgpu::ImageCopyTexture {
+                texture: &self.depth_texture_input.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            };
+
+            encoder.copy_texture_to_texture(
+                src_image_copy,
+                dst_image_copy,
+                wgpu::Extent3d {
+                    width: self.size.width,
+                    height: self.size.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        {
+            let mut compute_pass_front = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Compute Pass Front"),
+            });
+
+            compute_pass_front.set_bind_group(0, &self.compute_bind_group_front, &[]);
+            compute_pass_front.set_pipeline(self.sphere_front.get_pipeline());
+            compute_pass_front.dispatch_workgroups(self.size.width, self.size.height, 1);
         }
 
         {

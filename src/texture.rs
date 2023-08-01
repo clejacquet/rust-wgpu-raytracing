@@ -13,6 +13,7 @@ impl Texture {
     pub fn create_depth_texture(
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
+        usage: wgpu::TextureUsages,
         label: &str,
     ) -> Self {
         let size = wgpu::Extent3d {
@@ -27,7 +28,7 @@ impl Texture {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: Self::DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: usage,
             view_formats: &[Self::DEPTH_FORMAT],
         };
         let texture = device.create_texture(&desc);
