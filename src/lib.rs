@@ -22,7 +22,7 @@ use wasm_bindgen::prelude::*;
 use camera::Camera;
 use camera_control::CameraController;
 use circle_camera_control::CircleCameraController;
-use model::{Model, ScreenVertex};
+use model::ScreenVertex;
 use texture::Texture;
 
 #[rustfmt::skip]
@@ -166,44 +166,44 @@ fn build_wasm_limits() -> wgpu::Limits {
     };
 }
 
-impl InstanceRaw {
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        use std::mem;
-        wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
-            // We need to switch from using a step mode of Vertex to Instance
-            // This means that our shaders will only change to use the next
-            // instance when the shader starts processing a new instance
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    // While our vertex shader only uses locations 0, and 1 now, in later tutorials we'll
-                    // be using 2, 3, and 4, for Vertex. We'll start at slot 5 not conflict with them later
-                    shader_location: 5,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                // A mat4 takes up 4 vertex slots as it is technically 4 vec4s. We need to define a slot
-                // for each vec4. We don't have to do this in code though.
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-                    shader_location: 6,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
-                    shader_location: 7,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
-                    shader_location: 8,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-            ],
-        }
-    }
-}
+// impl InstanceRaw {
+//     fn desc() -> wgpu::VertexBufferLayout<'static> {
+//         use std::mem;
+//         wgpu::VertexBufferLayout {
+//             array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
+//             // We need to switch from using a step mode of Vertex to Instance
+//             // This means that our shaders will only change to use the next
+//             // instance when the shader starts processing a new instance
+//             step_mode: wgpu::VertexStepMode::Instance,
+//             attributes: &[
+//                 wgpu::VertexAttribute {
+//                     offset: 0,
+//                     // While our vertex shader only uses locations 0, and 1 now, in later tutorials we'll
+//                     // be using 2, 3, and 4, for Vertex. We'll start at slot 5 not conflict with them later
+//                     shader_location: 5,
+//                     format: wgpu::VertexFormat::Float32x4,
+//                 },
+//                 // A mat4 takes up 4 vertex slots as it is technically 4 vec4s. We need to define a slot
+//                 // for each vec4. We don't have to do this in code though.
+//                 wgpu::VertexAttribute {
+//                     offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+//                     shader_location: 6,
+//                     format: wgpu::VertexFormat::Float32x4,
+//                 },
+//                 wgpu::VertexAttribute {
+//                     offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
+//                     shader_location: 7,
+//                     format: wgpu::VertexFormat::Float32x4,
+//                 },
+//                 wgpu::VertexAttribute {
+//                     offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
+//                     shader_location: 8,
+//                     format: wgpu::VertexFormat::Float32x4,
+//                 },
+//             ],
+//         }
+//     }
+// }
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -233,9 +233,8 @@ struct State {
     compute_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     screen_texture_bind_group: wgpu::BindGroup,
-    instances: Vec<Instance>,
-    #[allow(dead_code)]
-    instance_buffer: wgpu::Buffer,
+    // instances: Vec<Instance>,
+    // instance_buffer: wgpu::Buffer,
     screen_vbo: wgpu::Buffer,
     screen_texture: Texture,
     depth_texture: Texture,
@@ -435,42 +434,42 @@ impl State {
             })
             .collect::<Vec<_>>();
 
-        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instance_data),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        // let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        // let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        //     label: Some("Instance Buffer"),
+        //     contents: bytemuck::cast_slice(&instance_data),
+        //     usage: wgpu::BufferUsages::VERTEX,
+        // });
 
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-                label: Some("camera_bind_group_layout"),
-            });
+        // let camera_bind_group_layout =
+        //     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        //         entries: &[wgpu::BindGroupLayoutEntry {
+        //             binding: 0,
+        //             visibility: wgpu::ShaderStages::VERTEX,
+        //             ty: wgpu::BindingType::Buffer {
+        //                 ty: wgpu::BufferBindingType::Uniform,
+        //                 has_dynamic_offset: false,
+        //                 min_binding_size: None,
+        //             },
+        //             count: None,
+        //         }],
+        //         label: Some("camera_bind_group_layout"),
+        //     });
 
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-            label: Some("camera_bind_group"),
-        });
+        // let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        //     layout: &camera_bind_group_layout,
+        //     entries: &[wgpu::BindGroupEntry {
+        //         binding: 0,
+        //         resource: camera_buffer.as_entire_binding(),
+        //     }],
+        //     label: Some("camera_bind_group"),
+        // });
 
-        log::warn!("Load model");
-        let obj_model =
-            resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
-                .await
-                .unwrap();
+        // log::warn!("Load model");
+        // let obj_model =
+        //     resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
+        //         .await
+        //         .unwrap();
 
         // let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         //     label: Some("shader.wgsl"),
@@ -623,7 +622,7 @@ impl State {
             size,
             render_pipeline,
             compute_pipeline,
-            obj_model,
+            // obj_model,
             camera,
             camera_controller,
             camera_buffer,
@@ -636,9 +635,8 @@ impl State {
             screen_texture_bind_group,
             camera_uniform,
             camera_inv_uniform,
-            instances,
-            instance_buffer,
-            depth_texture,
+            // instances,
+            // instance_buffer,
             screen_vbo,
             screen_texture,
             window,
