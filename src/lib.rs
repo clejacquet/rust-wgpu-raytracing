@@ -25,7 +25,7 @@ use camera_control::CameraController;
 use circle_camera_control::CircleCameraController;
 use model::ScreenVertex;
 use models::sphere::Sphere;
-use models::triangle::Triangle;
+use models::triangle_list::{TriangleData, TriangleList};
 use texture::Texture;
 
 #[rustfmt::skip]
@@ -234,7 +234,7 @@ struct State {
     // camera_bind_group: wgpu::BindGroup,
     sphere: Sphere,
     sphere_front: Sphere,
-    triangle: Triangle,
+    triangle_list: TriangleList,
     // compute_bind_group_layout: wgpu::BindGroupLayout,
     compute_bind_group: wgpu::BindGroup,
     compute_bind_group_front: wgpu::BindGroup,
@@ -528,11 +528,20 @@ impl State {
 
         let sphere_front = Sphere::new(&device, 0.4, cgmath::Vector3::new(0.4, 0.4, -3.0));
 
-        let triangle = Triangle::new(
+        let triangle_list = TriangleList::new(
             &device,
-            cgmath::Vector3::new(0.4, 1.5, -4.0),
-            cgmath::Vector3::new(0.0, 1.0, -3.0),
-            cgmath::Vector3::new(0.8, 1.0, -3.0),
+            vec![
+                TriangleData::new(
+                    cgmath::Vector3::new(0.4, 1.5, -4.0),
+                    cgmath::Vector3::new(0.0, 1.0, -3.0),
+                    cgmath::Vector3::new(0.8, 1.0, -3.0),
+                ),
+                TriangleData::new(
+                    cgmath::Vector3::new(1.4, 1.5, -4.1),
+                    cgmath::Vector3::new(1.0, 1.0, -3.0),
+                    cgmath::Vector3::new(1.8, 1.0, -3.5),
+                ),
+            ],
         );
 
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -598,7 +607,7 @@ impl State {
         });
 
         let compute_bind_group_triangle = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: triangle.get_bind_group_layout(),
+            layout: triangle_list.get_bind_group_layout(),
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -622,7 +631,7 @@ impl State {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: triangle.get_buffer().as_entire_binding(),
+                    resource: triangle_list.get_buffer().as_entire_binding(),
                 },
             ],
             label: Some("compute_bind_group_triangle"),
@@ -705,7 +714,7 @@ impl State {
             // camera_bind_group,
             sphere,
             sphere_front,
-            triangle,
+            triangle_list,
             // compute_bind_group_layout,
             compute_bind_group,
             compute_bind_group_front,
@@ -877,7 +886,7 @@ impl State {
 
             self.compute_bind_group_triangle =
                 self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: self.triangle.get_bind_group_layout(),
+                    layout: self.triangle_list.get_bind_group_layout(),
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
@@ -905,7 +914,7 @@ impl State {
                         },
                         wgpu::BindGroupEntry {
                             binding: 5,
-                            resource: self.triangle.get_buffer().as_entire_binding(),
+                            resource: self.triangle_list.get_buffer().as_entire_binding(),
                         },
                     ],
                     label: Some("compute_bind_group_triangle"),
@@ -1126,7 +1135,7 @@ impl State {
                 });
 
             compute_pass_triangle.set_bind_group(0, &self.compute_bind_group_triangle, &[]);
-            compute_pass_triangle.set_pipeline(self.triangle.get_pipeline());
+            compute_pass_triangle.set_pipeline(self.triangle_list.get_pipeline());
             compute_pass_triangle.dispatch_workgroups(self.size.width, self.size.height, 1);
         }
 
