@@ -25,6 +25,7 @@ use camera_control::CameraController;
 use circle_camera_control::CircleCameraController;
 use model::ScreenVertex;
 use models::sphere::Sphere;
+use models::triangle::Triangle;
 use texture::Texture;
 
 #[rustfmt::skip]
@@ -233,9 +234,11 @@ struct State {
     // camera_bind_group: wgpu::BindGroup,
     sphere: Sphere,
     sphere_front: Sphere,
+    triangle: Triangle,
     // compute_bind_group_layout: wgpu::BindGroupLayout,
     compute_bind_group: wgpu::BindGroup,
     compute_bind_group_front: wgpu::BindGroup,
+    compute_bind_group_triangle: wgpu::BindGroup,
     compute_clear_buffer: wgpu::Buffer,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     screen_texture_bind_group: wgpu::BindGroup,
@@ -521,24 +524,15 @@ impl State {
             label: Some("screen_texture_bind_group"),
         });
 
-        let sphere = Sphere::new(
-            &device,
-            0.4,
-            cgmath::Vector3 {
-                x: 0.6,
-                y: 0.5,
-                z: -4.0,
-            },
-        );
+        let sphere = Sphere::new(&device, 0.4, cgmath::Vector3::new(0.6, 0.5, -4.0));
 
-        let sphere_front = Sphere::new(
+        let sphere_front = Sphere::new(&device, 0.4, cgmath::Vector3::new(0.4, 0.4, -3.0));
+
+        let triangle = Triangle::new(
             &device,
-            0.4,
-            cgmath::Vector3 {
-                x: 0.4,
-                y: 0.4,
-                z: -3.0,
-            },
+            cgmath::Vector3::new(0.4, 1.5, -4.0),
+            cgmath::Vector3::new(0.0, 1.0, -3.0),
+            cgmath::Vector3::new(0.8, 1.0, -3.0),
         );
 
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -601,6 +595,37 @@ impl State {
                 },
             ],
             label: Some("compute_bind_group_front"),
+        });
+
+        let compute_bind_group_triangle = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: triangle.get_bind_group_layout(),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&screen_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&depth_texture_input.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&depth_texture_output.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: camera_inv_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: screen_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: triangle.get_buffer().as_entire_binding(),
+                },
+            ],
+            label: Some("compute_bind_group_triangle"),
         });
 
         let render_pipeline_layout =
@@ -680,9 +705,11 @@ impl State {
             // camera_bind_group,
             sphere,
             sphere_front,
+            triangle,
             // compute_bind_group_layout,
             compute_bind_group,
             compute_bind_group_front,
+            compute_bind_group_triangle,
             compute_clear_buffer,
             texture_bind_group_layout,
             screen_texture_bind_group,
@@ -846,6 +873,42 @@ impl State {
                         },
                     ],
                     label: Some("compute_bind_group_front"),
+                });
+
+            self.compute_bind_group_triangle =
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: self.triangle.get_bind_group_layout(),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.screen_texture.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &self.depth_texture_input.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(
+                                &self.depth_texture_output.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: self.camera_inv_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: self.screen_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: self.triangle.get_buffer().as_entire_binding(),
+                        },
+                    ],
+                    label: Some("compute_bind_group_triangle"),
                 });
 
             let screen = Screen {
@@ -1030,6 +1093,41 @@ impl State {
             compute_pass_front.set_bind_group(0, &self.compute_bind_group_front, &[]);
             compute_pass_front.set_pipeline(self.sphere_front.get_pipeline());
             compute_pass_front.dispatch_workgroups(self.size.width, self.size.height, 1);
+        }
+        {
+            let src_image_copy = wgpu::ImageCopyTexture {
+                texture: &self.depth_texture_output.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            };
+
+            let dst_image_copy = wgpu::ImageCopyTexture {
+                texture: &self.depth_texture_input.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            };
+
+            encoder.copy_texture_to_texture(
+                src_image_copy,
+                dst_image_copy,
+                wgpu::Extent3d {
+                    width: self.size.width,
+                    height: self.size.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        {
+            let mut compute_pass_triangle =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Compute Pass Triangle"),
+                });
+
+            compute_pass_triangle.set_bind_group(0, &self.compute_bind_group_triangle, &[]);
+            compute_pass_triangle.set_pipeline(self.triangle.get_pipeline());
+            compute_pass_triangle.dispatch_workgroups(self.size.width, self.size.height, 1);
         }
 
         {
