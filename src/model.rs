@@ -2,11 +2,9 @@ use std::ops::Range;
 
 use crate::texture;
 
-
 pub trait Vertex {
     fn desc() -> wgpu::VertexBufferLayout<'static>;
 }
-
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -30,8 +28,8 @@ impl ScreenVertex {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x2,
-                }
-            ]
+                },
+            ],
         }
     }
 }
@@ -42,6 +40,42 @@ pub struct ModelVertex {
     pub position: [f32; 3],
     pub tex_coords: [f32; 2],
     pub normal: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ModelVertexSmall {
+    pub position: [f32; 3],
+    pub pad0: f32,
+    pub tex_coords: [f32; 2],
+    pub pad1: [f32; 2],
+}
+
+impl ModelVertexSmall {
+    pub fn new(position: [f32; 3], tex_coords: [f32; 2]) -> Self {
+        Self {
+            position,
+            pad0: 0.0,
+            tex_coords,
+            pad1: [0.0, 0.0],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ModelFaceSmall {
+    pub indices: [u32; 3],
+    pub pad0: u32,
+}
+
+impl ModelFaceSmall {
+    pub fn new(indices: [u32; 3]) -> Self {
+        Self {
+            indices,
+            pad0: 0,
+        }
+    }
 }
 
 impl Vertex for ModelVertex {
@@ -75,6 +109,9 @@ pub struct Material {
     pub name: String,
     pub diffuse_texture: texture::Texture,
     pub bind_group: wgpu::BindGroup,
+    pub ambient: cgmath::Vector3<f32>,
+    pub diffuse: cgmath::Vector3<f32>,
+    pub specular: cgmath::Vector3<f32>,
 }
 
 pub struct Mesh {

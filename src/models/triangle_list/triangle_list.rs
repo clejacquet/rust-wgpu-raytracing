@@ -1,8 +1,11 @@
 use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 
+use crate::model;
+
 pub struct TriangleList {
-    triangle_storage_buffer: wgpu::Buffer,
+    model: model::Model,
+    material_buffer: wgpu::Buffer,
     compute_bind_group_layout: wgpu::BindGroupLayout,
     compute_pipeline: wgpu::ComputePipeline,
 }
@@ -15,6 +18,17 @@ struct TriangleBufferData {
     p1: [f32; 3],
     pad1: f32,
     p2: [f32; 3],
+    pad2: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct MaterialData {
+    ambient: [f32; 3],
+    pad0: f32,
+    diffuse: [f32; 3],
+    pad1: f32,
+    specular: [f32; 3],
     pad2: f32,
 }
 
@@ -31,6 +45,20 @@ impl TriangleBufferData {
     }
 }
 
+impl MaterialData {
+    fn new(ambient: cgmath::Vector3<f32>, diffuse: cgmath::Vector3<f32>, specular: cgmath::Vector3<f32>) -> Self {
+        return Self {
+            ambient: ambient.into(),
+            pad0: 0.0,
+            diffuse: diffuse.into(),
+            pad1: 0.0,
+            specular: specular.into(),
+            pad2: 0.0,
+        };
+    }
+}
+
+#[derive(Clone)]
 pub struct TriangleData {
     p0: cgmath::Vector3<f32>,
     p1: cgmath::Vector3<f32>,
@@ -48,18 +76,7 @@ impl TriangleData {
 }
 
 impl TriangleList {
-    pub fn new(device: &wgpu::Device, triangle_list: Vec<TriangleData>) -> Self {
-        let triangle_storage_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("triangle_buffer_storage"),
-            contents: bytemuck::cast_slice(
-                &triangle_list
-                    .iter()
-                    .map(|triangle| TriangleBufferData::new(triangle.p0, triangle.p1, triangle.p2))
-                    .collect::<Vec<TriangleBufferData>>(),
-            ),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-
+    pub fn new(device: &wgpu::Device, model: model::Model) -> Self {
         let compute_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -123,14 +140,60 @@ impl TriangleList {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
                 label: Some("compute_bind_group_layout"),
+            });
+
+        let compute_texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+                label: Some("compute_texture_bind_group_layout"),
             });
 
         let compute_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("compute_pipeline_layout"),
-                bind_group_layouts: &[&compute_bind_group_layout],
+                bind_group_layouts: &[
+                    &compute_bind_group_layout,
+                    &compute_texture_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             });
 
@@ -146,19 +209,40 @@ impl TriangleList {
             module: &compute_shader,
         });
 
+        let material_data = MaterialData::new(model.materials[0].ambient, model.materials[0].diffuse, model.materials[0].specular);
+
+        let material_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("triangle_material_buffer"),
+            contents: bytemuck::cast_slice(&[material_data]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
         return Self {
-            triangle_storage_buffer,
+            model,
+            material_buffer,
             compute_bind_group_layout,
             compute_pipeline,
         };
     }
 
-    pub fn get_buffer(&self) -> &wgpu::Buffer {
-        &self.triangle_storage_buffer
+    pub fn get_vertex_buffer(&self) -> &wgpu::Buffer {
+        &self.model.meshes[0].vertex_buffer
+    }
+
+    pub fn get_index_buffer(&self) -> &wgpu::Buffer {
+        &self.model.meshes[0].index_buffer
+    }
+
+    pub fn get_material_buffer(&self) -> &wgpu::Buffer {
+        &self.material_buffer
     }
 
     pub fn get_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.compute_bind_group_layout
+    }
+
+    pub fn get_texture_bind_group(&self) -> &wgpu::BindGroup {
+        &self.model.materials[0].bind_group
     }
 
     pub fn get_pipeline(&self) -> &wgpu::ComputePipeline {

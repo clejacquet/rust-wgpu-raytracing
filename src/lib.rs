@@ -25,7 +25,7 @@ use camera_control::CameraController;
 use circle_camera_control::CircleCameraController;
 use model::ScreenVertex;
 use models::sphere::Sphere;
-use models::triangle_list::{TriangleData, TriangleList};
+use models::triangle_list::TriangleList;
 use texture::Texture;
 
 #[rustfmt::skip]
@@ -209,7 +209,8 @@ fn build_wasm_limits() -> wgpu::Limits {
 // }
 
 fn get_row_padding(width: u32) -> u32 {
-    (width as f32 / wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as f32).ceil() as u32 * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+    (width as f32 / wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as f32).ceil() as u32
+        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
 }
 
 #[repr(C)]
@@ -532,21 +533,39 @@ impl State {
 
         let sphere_front = Sphere::new(&device, 0.4, cgmath::Vector3::new(0.4, 0.4, -3.0));
 
-        let triangle_list = TriangleList::new(
+        let compute_texture_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+                label: Some("texture_bind_group_layout"),
+            });
+
+        let model = resources::load_model_compute(
+            "suzanne_lowpoly.obj",
             &device,
-            vec![
-                TriangleData::new(
-                    cgmath::Vector3::new(0.4, 1.5, -4.0),
-                    cgmath::Vector3::new(0.0, 1.0, -3.0),
-                    cgmath::Vector3::new(0.8, 1.0, -3.0),
-                ),
-                TriangleData::new(
-                    cgmath::Vector3::new(1.4, 1.5, -4.1),
-                    cgmath::Vector3::new(1.0, 1.0, -3.0),
-                    cgmath::Vector3::new(1.8, 1.0, -3.5),
-                ),
-            ],
-        );
+            &queue,
+            &compute_texture_layout,
+        )
+        .await
+        .unwrap();
+
+        let triangle_list = TriangleList::new(&device, model);
 
         let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: sphere.get_bind_group_layout(),
@@ -635,7 +654,15 @@ impl State {
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: triangle_list.get_buffer().as_entire_binding(),
+                    resource: triangle_list.get_vertex_buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: triangle_list.get_index_buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: triangle_list.get_material_buffer().as_entire_binding(),
                 },
             ],
             label: Some("compute_bind_group_triangle"),
@@ -781,9 +808,13 @@ impl State {
                 self.device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("Compute Clear Buffer"),
-                        contents: vec![0; (get_row_padding(32 * self.config.width) * self.config.height) as usize]
-                            .into_boxed_slice()
-                            .as_ref(),
+                        contents: vec![
+                            0;
+                            (get_row_padding(32 * self.config.width) * self.config.height)
+                                as usize
+                        ]
+                        .into_boxed_slice()
+                        .as_ref(),
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
                     });
 
@@ -918,7 +949,15 @@ impl State {
                         },
                         wgpu::BindGroupEntry {
                             binding: 5,
-                            resource: self.triangle_list.get_buffer().as_entire_binding(),
+                            resource: self.triangle_list.get_vertex_buffer().as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: self.triangle_list.get_index_buffer().as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: self.triangle_list.get_material_buffer().as_entire_binding(),
                         },
                     ],
                     label: Some("compute_bind_group_triangle"),
@@ -1041,7 +1080,7 @@ impl State {
                 buffer: &self.compute_clear_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(get_row_padding(32 * self.config.width)) ,
+                    bytes_per_row: Some(get_row_padding(32 * self.config.width)),
                     rows_per_image: Some(self.config.height),
                 },
             };
@@ -1139,6 +1178,7 @@ impl State {
                 });
 
             compute_pass_triangle.set_bind_group(0, &self.compute_bind_group_triangle, &[]);
+            compute_pass_triangle.set_bind_group(1, &self.triangle_list.get_texture_bind_group(), &[]);
             compute_pass_triangle.set_pipeline(self.triangle_list.get_pipeline());
             compute_pass_triangle.dispatch_workgroups(self.size.width, self.size.height, 1);
         }
@@ -1205,7 +1245,7 @@ pub async fn run() {
     let title = env!("CARGO_PKG_NAME");
     let window = winit::window::WindowBuilder::new()
         .with_title(title)
-        .with_inner_size(winit::dpi::LogicalSize::new(1280, 720))
+        .with_inner_size(winit::dpi::LogicalSize::new(600, 600))
         // .with_inner_size(winit::dpi::LogicalSize::new(600, 600))
         .build(&event_loop)
         .unwrap();
