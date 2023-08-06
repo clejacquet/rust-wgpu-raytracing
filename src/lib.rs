@@ -208,6 +208,10 @@ fn build_wasm_limits() -> wgpu::Limits {
 //     }
 // }
 
+fn get_row_padding(width: u32) -> u32 {
+    (width as f32 / wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as f32).ceil() as u32 * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Screen {
@@ -377,7 +381,7 @@ impl State {
 
         let compute_clear_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Compute Clear Buffer"),
-            contents: vec![0; (32 * config.width * config.height) as usize]
+            contents: vec![0; (get_row_padding(32 * config.width) * config.height) as usize]
                 .into_boxed_slice()
                 .as_ref(),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
@@ -777,7 +781,7 @@ impl State {
                 self.device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("Compute Clear Buffer"),
-                        contents: vec![0; (32 * self.config.width * self.config.height) as usize]
+                        contents: vec![0; (get_row_padding(32 * self.config.width) * self.config.height) as usize]
                             .into_boxed_slice()
                             .as_ref(),
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_SRC,
@@ -983,7 +987,7 @@ impl State {
                 buffer: &self.compute_clear_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(32 * self.config.width),
+                    bytes_per_row: Some(get_row_padding(32 * self.config.width)),
                     rows_per_image: Some(self.config.height),
                 },
             };
@@ -1010,7 +1014,7 @@ impl State {
                 buffer: &self.compute_clear_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(32 * self.config.width),
+                    bytes_per_row: Some(get_row_padding(32 * self.config.width)),
                     rows_per_image: Some(self.config.height),
                 },
             };
@@ -1037,7 +1041,7 @@ impl State {
                 buffer: &self.compute_clear_buffer,
                 layout: wgpu::ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(32 * self.config.width),
+                    bytes_per_row: Some(get_row_padding(32 * self.config.width)) ,
                     rows_per_image: Some(self.config.height),
                 },
             };
