@@ -49,7 +49,7 @@ var<uniform> camera: Camera;
 var<uniform> screen: Screen;
 
 @group(0) @binding(5)
-var<uniform> triangle_list: array<Triangle, 2>;
+var<storage> triangle_list: array<Triangle>;
 
 fn buildHitRecordAtIntersection(ray: Ray, center: vec3<f32>, intersection_t: f32) -> HitRecord {
     let intersection_point = ray.origin + ray.direction * intersection_t;
@@ -162,10 +162,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var i_min = 0;
     var min_hit = kNoHit;
-    // let element_count = arrayLength(triangle_list);
-    let element_count = 2;
+    let element_count = arrayLength(&triangle_list);
 
-    for (var i = 0; i < element_count; i++) {
+    for (var i = u32(0); i < element_count; i++) {
         let triangle = triangle_list[i];
         let hit_record = triangleRayIntersect(triangle, ray);
 

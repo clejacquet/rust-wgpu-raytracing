@@ -2,7 +2,7 @@ use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 
 pub struct TriangleList {
-    triangle_buffer: wgpu::Buffer,
+    triangle_storage_buffer: wgpu::Buffer,
     compute_bind_group_layout: wgpu::BindGroupLayout,
     compute_pipeline: wgpu::ComputePipeline,
 }
@@ -49,15 +49,15 @@ impl TriangleData {
 
 impl TriangleList {
     pub fn new(device: &wgpu::Device, triangle_list: Vec<TriangleData>) -> Self {
-        let triangle_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("triangle_buffer"),
+        let triangle_storage_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("triangle_buffer_storage"),
             contents: bytemuck::cast_slice(
                 &triangle_list
                     .iter()
                     .map(|triangle| TriangleBufferData::new(triangle.p0, triangle.p1, triangle.p2))
                     .collect::<Vec<TriangleBufferData>>(),
             ),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         let compute_bind_group_layout =
@@ -117,7 +117,7 @@ impl TriangleList {
                         binding: 5,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -147,14 +147,14 @@ impl TriangleList {
         });
 
         return Self {
-            triangle_buffer,
+            triangle_storage_buffer,
             compute_bind_group_layout,
             compute_pipeline,
         };
     }
 
     pub fn get_buffer(&self) -> &wgpu::Buffer {
-        &self.triangle_buffer
+        &self.triangle_storage_buffer
     }
 
     pub fn get_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
