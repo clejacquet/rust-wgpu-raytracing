@@ -71,10 +71,7 @@ pub struct ModelFaceSmall {
 
 impl ModelFaceSmall {
     pub fn new(indices: [u32; 3]) -> Self {
-        Self {
-            indices,
-            pad0: 0,
-        }
+        Self { indices, pad0: 0 }
     }
 }
 
@@ -118,13 +115,254 @@ pub struct Mesh {
     pub name: String,
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
-    pub num_elements: u32,
+    pub vertices: Vec<cgmath::Vector3<f32>>,
+    pub triangle_indices: Vec<[usize; 3]>,
+    pub num_elements: usize,
     pub material: usize,
 }
 
 pub struct Model {
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
+}
+
+#[derive(Clone)]
+pub struct BvhNode {
+    pub aabb_min: cgmath::Vector3<f32>,
+    pub aabb_max: cgmath::Vector3<f32>,
+    pub left_child: i32,
+    pub right_child: i32,
+    pub first_prim: usize,
+    pub prim_count: usize,
+}
+
+pub struct BvhData {
+    pub nodes: Vec<BvhNode>,
+    pub root_id: usize,
+    pub node_count: usize,
+}
+
+impl BvhData {
+    pub fn new(primitive_count: usize) -> Self {
+        Self {
+            nodes: vec![
+                BvhNode {
+                    aabb_min: cgmath::Vector3::new(0.0, 0.0, 0.0),
+                    aabb_max: cgmath::Vector3::new(0.0, 0.0, 0.0),
+                    left_child: -1,
+                    right_child: -1,
+                    first_prim: 0,
+                    prim_count: 0,
+                };
+                2 * primitive_count + 1
+            ],
+            root_id: 0,
+            node_count: 0,
+        }
+    }
+
+    fn update_bounds(
+        &mut self,
+        node_id: usize,
+        triangles_indices: &Vec<[usize; 3]>,
+        vertices: &Vec<cgmath::Vector3<f32>>,
+    ) {
+        let node = &self.nodes[node_id];
+
+        if node.prim_count == 0 {
+            let node_mut = &mut self.nodes[node_id];
+            node_mut.aabb_min = cgmath::Vector3::new(0.0, 0.0, 0.0);
+            node_mut.aabb_max = cgmath::Vector3::new(0.0, 0.0, 0.0);
+
+            return;
+        }
+
+        let bounds = (node.first_prim..(node.first_prim + node.prim_count))
+            .map(|prim_id| {
+                let triangle = triangles_indices[prim_id].map(|vertex_id| vertices[vertex_id]);
+                [
+                    cgmath::Vector3::new(
+                        triangle
+                            .map(|vertex| vertex[0])
+                            .iter()
+                            .copied()
+                            .min_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                        triangle
+                            .map(|vertex| vertex[1])
+                            .iter()
+                            .copied()
+                            .min_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                        triangle
+                            .map(|vertex| vertex[2])
+                            .iter()
+                            .copied()
+                            .min_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                    ),
+                    cgmath::Vector3::new(
+                        triangle
+                            .map(|vertex| vertex[0])
+                            .iter()
+                            .copied()
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                        triangle
+                            .map(|vertex| vertex[1])
+                            .iter()
+                            .copied()
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                        triangle
+                            .map(|vertex| vertex[2])
+                            .iter()
+                            .copied()
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                    ),
+                ]
+            })
+            .reduce(|bound_acc, bound| {
+                [
+                    cgmath::Vector3::new(
+                        [bound_acc[0][0], bound[0][0]]
+                            .iter()
+                            .copied()
+                            .min_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                        [bound_acc[0][1], bound[0][1]]
+                            .iter()
+                            .copied()
+                            .min_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                        [bound_acc[0][2], bound[0][2]]
+                            .iter()
+                            .copied()
+                            .min_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                    ),
+                    cgmath::Vector3::new(
+                        [bound_acc[1][0], bound[1][0]]
+                            .iter()
+                            .copied()
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                        [bound_acc[1][1], bound[1][1]]
+                            .iter()
+                            .copied()
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                        [bound_acc[1][2], bound[1][2]]
+                            .iter()
+                            .copied()
+                            .max_by(|a, b| a.partial_cmp(b).unwrap())
+                            .unwrap(),
+                    ),
+                ]
+            });
+
+        self.nodes[node_id].aabb_min = bounds.unwrap()[0];
+        self.nodes[node_id].aabb_max = bounds.unwrap()[1];
+    }
+}
+
+fn get_centroid(triangle: [cgmath::Vector3<f32>; 3]) -> cgmath::Vector3<f32> {
+    0.5 * triangle[0] + 0.5 * triangle[1] + 0.5 * triangle[2]
+}
+
+fn subdivide_bvh(
+    bvh_data: &mut BvhData,
+    node_id: usize,
+    triangles_indices: &mut Vec<[usize; 3]>,
+    vertices: &Vec<cgmath::Vector3<f32>>,
+) {
+    let mut i = 0;
+    let mut j = 0;
+    {
+        let node = &bvh_data.nodes[node_id];
+        let extent = node.aabb_max - bvh_data.nodes[node_id].aabb_min;
+
+        let aabb_min: [f32; 3] = node.aabb_min.into();
+        let extent_slice: [f32; 3] = extent.into();
+
+        let mut axis = 0;
+
+        if extent.y > extent.x {
+            axis = 1;
+        }
+
+        if extent.z > extent_slice[axis] {
+            axis = 2;
+        }
+
+        let split_pos = aabb_min[axis] + extent_slice[axis] * 0.5;
+
+        i = node.first_prim;
+        j = node.first_prim + node.prim_count - 1;
+
+        while i <= j {
+            let triangle = triangles_indices[i].map(|vertex_id| vertices[vertex_id]);
+            let centroid: [f32; 3] = get_centroid(triangle).into();
+
+            if centroid[axis] < split_pos {
+                i += 1;
+            } else {
+                triangles_indices.swap(i, j);
+                j -= 1;
+            }
+        }
+    }
+
+    let left_count = i - bvh_data.nodes[node_id].first_prim;
+
+    // abort split if one of the sides is empty
+    if left_count == 0 || left_count == bvh_data.nodes[node_id].prim_count {
+        return;
+    }
+
+    let new_left_node_id = bvh_data.node_count;
+    bvh_data.node_count += 1;
+    let new_right_node_id = bvh_data.node_count;
+    bvh_data.node_count += 1;
+
+    bvh_data.nodes[new_left_node_id].first_prim = bvh_data.nodes[node_id].first_prim;
+    bvh_data.nodes[new_left_node_id].prim_count = left_count;
+
+    bvh_data.nodes[new_right_node_id].first_prim = i;
+    bvh_data.nodes[new_right_node_id].prim_count = bvh_data.nodes[node_id].prim_count - left_count;
+
+    bvh_data.update_bounds(new_left_node_id, triangles_indices, vertices);
+    bvh_data.update_bounds(new_right_node_id, triangles_indices, vertices);
+
+    bvh_data.nodes[node_id].left_child = new_left_node_id as i32;
+    bvh_data.nodes[node_id].right_child = new_right_node_id as i32;
+    bvh_data.nodes[node_id].prim_count = 0;
+    bvh_data.nodes[node_id].first_prim = 0;
+
+    subdivide_bvh(bvh_data, new_left_node_id, triangles_indices, vertices);
+    subdivide_bvh(bvh_data, new_right_node_id, triangles_indices, vertices);
+}
+
+impl Model {
+    pub fn build_bvh(
+        &self,
+        triangles_indices: &mut Vec<[usize; 3]>,
+        vertices: &Vec<cgmath::Vector3<f32>>,
+    ) -> BvhData {
+        let primitive_count = self.meshes[0].triangle_indices.len();
+        let mut bvh_data = BvhData::new(primitive_count);
+
+        bvh_data.root_id = 0;
+        bvh_data.node_count = 1;
+        bvh_data.nodes[bvh_data.root_id].first_prim = 0;
+        bvh_data.nodes[bvh_data.root_id].prim_count = primitive_count;
+
+        bvh_data.update_bounds(0, triangles_indices, vertices);
+        subdivide_bvh(&mut bvh_data, 0, triangles_indices, vertices);
+
+        return bvh_data;
+    }
 }
 
 pub trait DrawModel<'a> {
@@ -175,7 +413,7 @@ where
         self.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         self.set_bind_group(0, &material.bind_group, &[]);
         self.set_bind_group(1, camera_bind_group, &[]);
-        self.draw_indexed(0..mesh.num_elements, 0, instances);
+        self.draw_indexed(0..mesh.num_elements as u32, 0, instances);
     }
 
     fn draw_model(&mut self, model: &'b Model, camera_bind_group: &'b wgpu::BindGroup) {

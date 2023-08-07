@@ -5,6 +5,7 @@ use crate::model;
 
 pub struct TriangleList {
     model: model::Model,
+    bvh: model::BvhData,
     material_buffer: wgpu::Buffer,
     compute_bind_group_layout: wgpu::BindGroupLayout,
     compute_pipeline: wgpu::ComputePipeline,
@@ -217,8 +218,11 @@ impl TriangleList {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
+        let bvh = model.build_bvh(&mut model.meshes[0].triangle_indices.clone(), &model.meshes[0].vertices);
+
         return Self {
             model,
+            bvh,
             material_buffer,
             compute_bind_group_layout,
             compute_pipeline,

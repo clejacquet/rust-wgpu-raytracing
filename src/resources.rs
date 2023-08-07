@@ -120,7 +120,7 @@ pub async fn load_model(
     let meshes = models
         .into_iter()
         .map(|m| {
-            let vertices = (0..m.mesh.positions.len() / 3)
+            let vertices_data = (0..m.mesh.positions.len() / 3)
                 .map(|i| model::ModelVertex {
                     position: [
                         m.mesh.positions[i * 3],
@@ -136,9 +136,29 @@ pub async fn load_model(
                 })
                 .collect::<Vec<_>>();
 
+            let vertices = (0..m.mesh.positions.len() / 3)
+                .map(|i| {
+                    cgmath::Vector3::<f32>::new(
+                        m.mesh.positions[i * 3],
+                        m.mesh.positions[i * 3 + 1],
+                        m.mesh.positions[i * 3 + 2],
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let triangle_indices = (0..m.mesh.indices.len() / 3)
+                .map(|i| {
+                    [
+                        m.mesh.indices[i * 3] as usize,
+                        m.mesh.indices[i * 3 + 1] as usize,
+                        m.mesh.indices[i * 3 + 2] as usize,
+                    ]
+                })
+                .collect::<Vec<_>>();
+
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{:?} Vertex Buffer", file_name)),
-                contents: bytemuck::cast_slice(&vertices),
+                contents: bytemuck::cast_slice(&vertices_data),
                 usage: wgpu::BufferUsages::VERTEX,
             });
             let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -151,7 +171,9 @@ pub async fn load_model(
                 name: file_name.to_string(),
                 vertex_buffer,
                 index_buffer,
-                num_elements: m.mesh.indices.len() as u32,
+                vertices,
+                triangle_indices,
+                num_elements: m.mesh.indices.len(),
                 material: m.mesh.material_id.unwrap_or(0),
             }
         })
@@ -215,7 +237,7 @@ pub async fn load_model_compute(
     let meshes = models
         .into_iter()
         .map(|m| {
-            let vertices = (0..m.mesh.positions.len() / 3)
+            let vertices_data = (0..m.mesh.positions.len() / 3)
                 .map(|i| {
                     model::ModelVertexSmall::new(
                         [
@@ -238,9 +260,29 @@ pub async fn load_model_compute(
                 })
                 .collect::<Vec<_>>();
 
+            let vertices = (0..m.mesh.positions.len() / 3)
+                .map(|i| {
+                    cgmath::Vector3::<f32>::new(
+                        m.mesh.positions[i * 3],
+                        m.mesh.positions[i * 3 + 1],
+                        m.mesh.positions[i * 3 + 2],
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let triangle_indices = (0..m.mesh.indices.len() / 3)
+                .map(|i| {
+                    [
+                        m.mesh.indices[i * 3] as usize,
+                        m.mesh.indices[i * 3 + 1] as usize,
+                        m.mesh.indices[i * 3 + 2] as usize,
+                    ]
+                })
+                .collect::<Vec<_>>();
+
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("{:?} Vertex Buffer", file_name)),
-                contents: bytemuck::cast_slice(&vertices),
+                contents: bytemuck::cast_slice(&vertices_data),
                 usage: wgpu::BufferUsages::STORAGE,
             });
 
@@ -254,7 +296,9 @@ pub async fn load_model_compute(
                 name: file_name.to_string(),
                 vertex_buffer,
                 index_buffer,
-                num_elements: m.mesh.indices.len() as u32,
+                vertices,
+                triangle_indices,
+                num_elements: m.mesh.indices.len(),
                 material: m.mesh.material_id.unwrap_or(0),
             }
         })
