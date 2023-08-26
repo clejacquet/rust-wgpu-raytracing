@@ -344,25 +344,22 @@ fn subdivide_bvh(
     subdivide_bvh(bvh_data, new_right_node_id, triangles_indices, vertices);
 }
 
-impl Model {
-    pub fn build_bvh(
-        &self,
-        triangles_indices: &mut Vec<[usize; 3]>,
-        vertices: &Vec<cgmath::Vector3<f32>>,
-    ) -> BvhData {
-        let primitive_count = self.meshes[0].triangle_indices.len();
-        let mut bvh_data = BvhData::new(primitive_count);
+pub fn build_bvh(
+    triangles_indices: &mut Vec<[usize; 3]>,
+    vertices: &Vec<cgmath::Vector3<f32>>,
+) -> BvhData {
+    let primitive_count = triangles_indices.len();
+    let mut bvh_data = BvhData::new(primitive_count);
 
-        bvh_data.root_id = 0;
-        bvh_data.node_count = 1;
-        bvh_data.nodes[bvh_data.root_id].first_prim = 0;
-        bvh_data.nodes[bvh_data.root_id].prim_count = primitive_count;
+    bvh_data.root_id = 0;
+    bvh_data.node_count = 1;
+    bvh_data.nodes[bvh_data.root_id].first_prim = 0;
+    bvh_data.nodes[bvh_data.root_id].prim_count = primitive_count;
 
-        bvh_data.update_bounds(0, triangles_indices, vertices);
-        subdivide_bvh(&mut bvh_data, 0, triangles_indices, vertices);
+    bvh_data.update_bounds(0, triangles_indices, vertices);
+    subdivide_bvh(&mut bvh_data, 0, triangles_indices, vertices);
 
-        return bvh_data;
-    }
+    return bvh_data;
 }
 
 pub trait DrawModel<'a> {

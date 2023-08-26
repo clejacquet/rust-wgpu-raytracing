@@ -47,7 +47,27 @@ struct HitRecord {
     barycentric: vec3<f32>,
 }
 
+struct HitResult {
+    record: HitRecord,
+    object_id: u32,
+}
+
+struct BvhNodeData {
+    left_child: i32,
+    right_child: i32,
+    first_prim: u32,
+    prim_count: u32,
+    aabb_min: vec3<f32>,
+    aabb_max: vec3<f32>,
+}
+
+struct BvhMetaData {
+    root_id: u32,
+    node_count: u32,
+}
+
 var<private> kNoHit : HitRecord = HitRecord(false, 0.0f, vec3<f32>(0.0f, 0.0f, 0.0f), vec3<f32>(0.0f, 0.0f, 0.0f));
+var<private> kNoHitResult : HitResult = HitResult(HitRecord(false, 0.0f, vec3<f32>(0.0f, 0.0f, 0.0f), vec3<f32>(0.0f, 0.0f, 0.0f)), 0u);
 var<private> kNear : f32 = 0.01;
 var<private> kFar : f32 = 100.0;
 var<private> kEpsilon : f32 = 0.000001;
@@ -68,6 +88,12 @@ var<storage> face_list: array<vec3<u32>>;
 
 @group(0) @binding(7)
 var<uniform> material: Material;
+
+@group(0) @binding(8)
+var<storage> bvh_nodes: array<BvhNodeData>;
+
+@group(0) @binding(9)
+var<uniform> bvh_metadata: BvhMetaData;
 
 @group(1) @binding(0)
 var texture_diffuse: texture_2d<f32>;
@@ -173,16 +199,7 @@ fn pixelToRay_ortho(x: u32, y: u32) -> Ray {
     return Ray(ray_origin, ray_dir);
 }
 
-
-@compute
-@workgroup_size(1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // if (global_id.x >= screen.width || global_id.y >= screen.height || global_id.z >= 1u) {
-    //     return;
-    // }
-
-    let ray = pixelToRay(global_id.x, global_id.y);
-
+fn scene_traversal_naive(ray: Ray) -> HitResult {
     var i_min = 0;
     var min_hit = kNoHit;
     let element_count = arrayLength(&face_list);
@@ -201,7 +218,111 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    let hit_record = min_hit;
+    return HitResult(min_hit, u32(i_min));
+}
+
+fn intersect_aabb(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> bool {
+    let tx1 = (bmin.x - ray.origin.x) / ray.direction.x;
+    let tx2 = (bmax.x - ray.origin.x) / ray.direction.x;
+    var tmin = min( tx1, tx2 );
+    var tmax = max( tx1, tx2 );
+    let ty1 = (bmin.y - ray.origin.y) / ray.direction.y;
+    let ty2 = (bmax.y - ray.origin.y) / ray.direction.y;
+    tmin = max( tmin, min( ty1, ty2 ) );
+    tmax = min( tmax, max( ty1, ty2 ) );
+    let tz1 = (bmin.z - ray.origin.z) / ray.direction.z;
+    let tz2 = (bmax.z - ray.origin.z) / ray.direction.z;
+    tmin = max( tmin, min( tz1, tz2 ) );
+    tmax = min( tmax, max( tz1, tz2 ) );
+    return tmax >= tmin;
+}
+
+fn intersect_bvh(ray: Ray, collision_list: ptr<function, array<i32, 128>>) -> i32 {
+    var stack = array<i32, 64>();
+
+    stack[0] = 0;
+    var stack_counter = 1;
+
+    var collision_counter = 0;
+
+    for (var i = 0; i < 100 && stack_counter > 0 && stack_counter < 64; i++) {
+        stack_counter -= 1;
+        let node = bvh_nodes[stack[stack_counter]];
+        let left_node = bvh_nodes[node.left_child];
+        let right_node = bvh_nodes[node.right_child];
+
+        let left_leaf = left_node.left_child == -1 && left_node.right_child == -1;
+        let right_leaf = right_node.left_child == -1 && right_node.right_child == -1;
+
+        let left_overlap = intersect_aabb(ray, left_node.aabb_min, left_node.aabb_max);
+        let right_overlap = intersect_aabb(ray, right_node.aabb_min, right_node.aabb_max);
+
+
+        if (right_overlap && right_leaf) {
+            (*collision_list)[collision_counter] = node.right_child;
+            collision_counter += 1;
+        }
+        if (left_overlap && left_leaf) {
+            (*collision_list)[collision_counter] = node.left_child;
+            collision_counter += 1;
+        }
+
+        if (left_overlap && !left_leaf) {
+            stack[stack_counter] = node.left_child;
+            stack_counter += 1;
+        }
+        if (right_overlap && !right_leaf) {
+            stack[stack_counter] = node.right_child;
+            stack_counter += 1;
+        }
+    }
+
+    return collision_counter;
+}
+
+fn scene_traversal_bvh(ray: Ray) -> HitResult {
+    var collision_list = array<i32, 128>();
+    let collision_count = intersect_bvh(ray, &collision_list);
+
+
+    var i_min = 0;
+    var min_hit = kNoHit;
+
+    for (var c = 0; c < collision_count; c++) {
+        let prim_start = i32(bvh_nodes[collision_list[c]].first_prim);
+        let prim_end = prim_start + i32(bvh_nodes[collision_list[c]].prim_count);
+
+        for (var i = prim_start; i < prim_end; i++) {
+            let vertex0 = vertice_list[face_list[i][0]].pos;
+            let vertex1 = vertice_list[face_list[i][1]].pos;
+            let vertex2 = vertice_list[face_list[i][2]].pos;
+        
+            let triangle = Triangle(vertex0, vertex1, vertex2);
+            let hit_record = triangleRayIntersect(triangle, ray);
+
+            if ((!min_hit.hit && hit_record.hit) || (hit_record.hit && hit_record.distance < min_hit.distance)) {
+                min_hit = hit_record;
+                i_min = i;
+            }
+        }
+    }
+
+    return HitResult(min_hit, u32(i_min));
+}
+
+
+@compute
+@workgroup_size(1)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    // if (global_id.x >= screen.width || global_id.y >= screen.height || global_id.z >= 1u) {
+    //     return;
+    // }
+
+    let ray = pixelToRay(global_id.x, global_id.y);
+
+    // let hit_result = scene_traversal_naive(ray);
+    let hit_result = scene_traversal_bvh(ray);
+    let hit_record = hit_result.record;
 
     var final_color = vec4<f32>(0.0f, 0.0f, 0.0f, 1.0f);
 
@@ -215,9 +336,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         // Shading
-        let tex_coords_0 = vertice_list[face_list[i_min][0]].tex;
-        let tex_coords_1 = vertice_list[face_list[i_min][1]].tex;
-        let tex_coords_2 = vertice_list[face_list[i_min][2]].tex;
+        let hit_object_id = hit_result.object_id;
+        let tex_coords_0 = vertice_list[face_list[hit_object_id][0]].tex;
+        let tex_coords_1 = vertice_list[face_list[hit_object_id][1]].tex;
+        let tex_coords_2 = vertice_list[face_list[hit_object_id][2]].tex;
         var tex_coords = hit_record.barycentric[0] * tex_coords_0 + hit_record.barycentric[1] * tex_coords_1 + hit_record.barycentric[2] * tex_coords_2;        
 
         tex_coords = vec2<f32>(tex_coords.x, 1.0 - tex_coords.y);

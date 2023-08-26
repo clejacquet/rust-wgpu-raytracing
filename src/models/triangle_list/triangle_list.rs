@@ -2,10 +2,16 @@ use wgpu::util::BufferInitDescriptor;
 use wgpu::util::DeviceExt;
 
 use crate::model;
+use crate::model::BvhNode;
+use crate::resources::ModelData;
 
 pub struct TriangleList {
-    model: model::Model,
+    model: ModelData,
     bvh: model::BvhData,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    bvh_node_buffer: wgpu::Buffer,
+    bvh_metadata_buffer: wgpu::Buffer,
     material_buffer: wgpu::Buffer,
     compute_bind_group_layout: wgpu::BindGroupLayout,
     compute_pipeline: wgpu::ComputePipeline,
@@ -33,6 +39,26 @@ struct MaterialData {
     pad2: f32,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct BvhNodeData {
+    left_child: i32,
+    right_child: i32,
+    first_prim: u32,
+    prim_count: u32,
+    aabb_min: [f32; 3],
+    pad0: f32,
+    aabb_max: [f32; 3],
+    pad1: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BvhMetaData {
+    pub root_id: u32,
+    pub node_count: u32,
+}
+
 impl TriangleBufferData {
     fn new(p0: cgmath::Vector3<f32>, p1: cgmath::Vector3<f32>, p2: cgmath::Vector3<f32>) -> Self {
         return Self {
@@ -47,7 +73,11 @@ impl TriangleBufferData {
 }
 
 impl MaterialData {
-    fn new(ambient: cgmath::Vector3<f32>, diffuse: cgmath::Vector3<f32>, specular: cgmath::Vector3<f32>) -> Self {
+    fn new(
+        ambient: cgmath::Vector3<f32>,
+        diffuse: cgmath::Vector3<f32>,
+        specular: cgmath::Vector3<f32>,
+    ) -> Self {
         return Self {
             ambient: ambient.into(),
             pad0: 0.0,
@@ -56,6 +86,21 @@ impl MaterialData {
             specular: specular.into(),
             pad2: 0.0,
         };
+    }
+}
+
+impl BvhNodeData {
+    fn new(node: &BvhNode) -> Self {
+        Self {
+            aabb_min: node.aabb_min.into(),
+            pad0: 0.0,
+            aabb_max: node.aabb_max.into(),
+            pad1: 0.0,
+            left_child: node.left_child,
+            right_child: node.right_child,
+            first_prim: node.first_prim as u32,
+            prim_count: node.prim_count as u32,
+        }
     }
 }
 
@@ -77,7 +122,7 @@ impl TriangleData {
 }
 
 impl TriangleList {
-    pub fn new(device: &wgpu::Device, model: model::Model) -> Self {
+    pub fn new(device: &wgpu::Device, model: ModelData) -> Self {
         let compute_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -161,6 +206,26 @@ impl TriangleList {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
                 label: Some("compute_bind_group_layout"),
             });
@@ -210,7 +275,11 @@ impl TriangleList {
             module: &compute_shader,
         });
 
-        let material_data = MaterialData::new(model.materials[0].ambient, model.materials[0].diffuse, model.materials[0].specular);
+        let material_data = MaterialData::new(
+            model.materials[0].ambient,
+            model.materials[0].diffuse,
+            model.materials[0].specular,
+        );
 
         let material_buffer = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("triangle_material_buffer"),
@@ -218,27 +287,87 @@ impl TriangleList {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-        let bvh = model.build_bvh(&mut model.meshes[0].triangle_indices.clone(), &model.meshes[0].vertices);
+        let mut triangle_indices = model.meshes[0].triangle_indices.clone();
+
+        let bvh = model::build_bvh(&mut triangle_indices, &model.meshes[0].vertices);
+
+        let vertices_data = (0..model.meshes[0].vertices.len())
+            .map(|i| {
+                model::ModelVertexSmall::new(
+                    model.meshes[0].vertices[i].into(),
+                    model.meshes[0].texcoords[i].into(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let faces = (0..triangle_indices.len())
+            .map(|i| model::ModelFaceSmall::new(triangle_indices[i].map(|index| index as u32)))
+            .collect::<Vec<_>>();
+
+        let bvh_node_data = (0..bvh.node_count)
+            .map(|node_i| BvhNodeData::new(&bvh.nodes[node_i]))
+            .collect::<Vec<_>>();
+
+        let bvh_metadata = BvhMetaData {
+            root_id: bvh.root_id as u32,
+            node_count: bvh.node_count as u32,
+        };
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{:?} Vertex Buffer", "triangle_list")),
+            contents: bytemuck::cast_slice(&vertices_data),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{:?} Index Buffer", "triangle_list")),
+            contents: bytemuck::cast_slice(&faces),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let bvh_node_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{:?} BVH Node Buffer", "triangle_list")),
+            contents: bytemuck::cast_slice(&bvh_node_data),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let bvh_metadata_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{:?} BVH Metadata Buffer", "triangle_list")),
+            contents: bytemuck::cast_slice(&[bvh_metadata]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
         return Self {
             model,
             bvh,
+            vertex_buffer,
+            index_buffer,
             material_buffer,
             compute_bind_group_layout,
             compute_pipeline,
+            bvh_node_buffer,
+            bvh_metadata_buffer,
         };
     }
 
     pub fn get_vertex_buffer(&self) -> &wgpu::Buffer {
-        &self.model.meshes[0].vertex_buffer
+        &self.vertex_buffer
     }
 
     pub fn get_index_buffer(&self) -> &wgpu::Buffer {
-        &self.model.meshes[0].index_buffer
+        &self.index_buffer
     }
 
     pub fn get_material_buffer(&self) -> &wgpu::Buffer {
         &self.material_buffer
+    }
+
+    pub fn get_bvh_node_buffer(&self) -> &wgpu::Buffer {
+        &self.bvh_node_buffer
+    }
+
+    pub fn get_bvh_metadata_buffer(&self) -> &wgpu::Buffer {
+        &self.bvh_metadata_buffer
     }
 
     pub fn get_bind_group_layout(&self) -> &wgpu::BindGroupLayout {

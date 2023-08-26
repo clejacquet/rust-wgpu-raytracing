@@ -27,6 +27,7 @@ use model::ScreenVertex;
 use models::sphere::Sphere;
 use models::triangle_list::TriangleList;
 use texture::Texture;
+use wgpu_profiler::*;
 
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
@@ -254,6 +255,9 @@ struct State {
     depth_texture_input: Texture,
     depth_texture_output: Texture,
     window: Rc<Window>,
+
+    profiler: wgpu_profiler::GpuProfiler,
+
 }
 
 impl State {
@@ -287,7 +291,7 @@ impl State {
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: None,
-                    features: wgpu::Features::empty(),
+                    features: adapter.features() & GpuProfiler::ALL_WGPU_TIMER_FEATURES,
                     // WebGL doesn't support all of wgpu's features, so if
                     // we're building for the web we'll have to disable some.
                     limits: if cfg!(target_arch = "wasm32") {
@@ -556,7 +560,7 @@ impl State {
                 label: Some("texture_bind_group_layout"),
             });
 
-        let model = resources::load_model_compute(
+        let model = resources::load_model_data_compute(
             "suzanne_lowpoly.obj",
             &device,
             &queue,
@@ -664,6 +668,14 @@ impl State {
                     binding: 7,
                     resource: triangle_list.get_material_buffer().as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: triangle_list.get_bvh_node_buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: triangle_list.get_bvh_metadata_buffer().as_entire_binding(),
+                },
             ],
             label: Some("compute_bind_group_triangle"),
         });
@@ -728,6 +740,8 @@ impl State {
             multiview: None,
         });
 
+        let profiler = wgpu_profiler::GpuProfiler::new(4, queue.get_timestamp_period(), device.features());
+
         Self {
             surface,
             device,
@@ -762,6 +776,7 @@ impl State {
             screen_vbo,
             screen_texture,
             window,
+            profiler,
         }
     }
 
@@ -958,6 +973,14 @@ impl State {
                         wgpu::BindGroupEntry {
                             binding: 7,
                             resource: self.triangle_list.get_material_buffer().as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 8,
+                            resource: self.triangle_list.get_bvh_node_buffer().as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 9,
+                            resource: self.triangle_list.get_bvh_metadata_buffer().as_entire_binding(),
                         },
                     ],
                     label: Some("compute_bind_group_triangle"),
@@ -1172,15 +1195,17 @@ impl State {
             );
         }
         {
-            let mut compute_pass_triangle =
-                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Compute Pass Triangle"),
-                });
+            wgpu_profiler!("Compute Triangle", &mut self.profiler, &mut encoder, &self.device, {
+                let mut compute_pass_triangle =
+                    encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Compute Pass Triangle"),
+                    });
 
-            compute_pass_triangle.set_bind_group(0, &self.compute_bind_group_triangle, &[]);
-            compute_pass_triangle.set_bind_group(1, &self.triangle_list.get_texture_bind_group(), &[]);
-            compute_pass_triangle.set_pipeline(self.triangle_list.get_pipeline());
-            compute_pass_triangle.dispatch_workgroups(self.size.width, self.size.height, 1);
+                compute_pass_triangle.set_bind_group(0, &self.compute_bind_group_triangle, &[]);
+                compute_pass_triangle.set_bind_group(1, &self.triangle_list.get_texture_bind_group(), &[]);
+                compute_pass_triangle.set_pipeline(self.triangle_list.get_pipeline());
+                compute_pass_triangle.dispatch_workgroups(self.size.width, self.size.height, 1);
+            });
         }
 
         {
@@ -1210,10 +1235,12 @@ impl State {
                 depth_stencil_attachment: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.screen_vbo.slice(..));
-            render_pass.set_bind_group(0, &self.screen_texture_bind_group, &[]);
-            render_pass.draw(0..6, 0..1);
+            wgpu_profiler!("Render", &mut self.profiler, &mut render_pass, &self.device, {
+                render_pass.set_pipeline(&self.render_pipeline);
+                render_pass.set_vertex_buffer(0, self.screen_vbo.slice(..));
+                render_pass.set_bind_group(0, &self.screen_texture_bind_group, &[]);
+                render_pass.draw(0..6, 0..1);
+            });
 
             // render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             // render_pass.draw_model_instanced(
@@ -1221,10 +1248,28 @@ impl State {
             //     0..self.instances.len() as u32,
             //     &self.camera_bind_group,
             // );
+
         }
 
+        // Wgpu-profiler needs to insert buffer copy commands.
+        self.profiler.resolve_queries(&mut encoder);
+        
         self.queue.submit(iter::once(encoder.finish()));
         output.present();
+
+        // And finally, to end a profiling frame, call `end_frame`.
+        // This does a few checks and will let you know if something is off!
+        self.profiler.end_frame().unwrap();
+
+        // Retrieving the oldest available frame and writing it out to a chrome trace file.
+        // let profiling_data_opt = self.profiler.process_finished_frame();
+
+        // if let Some(profiling_data) = profiling_data_opt {
+        //     for data in profiling_data {
+        //         println!("Time: {}ms", (data.time.end - data.time.start) * 1000.0);
+        //     }
+        //     println!("");
+        // }
 
         Ok(())
     }
