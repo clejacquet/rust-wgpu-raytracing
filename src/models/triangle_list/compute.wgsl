@@ -222,20 +222,14 @@ fn scene_traversal_naive(ray: Ray) -> HitResult {
 }
 
 fn intersect_aabb(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> bool {
-    let tx1 = (bmin.x - ray.origin.x) / ray.direction.x;
-    let tx2 = (bmax.x - ray.origin.x) / ray.direction.x;
-    var tmin = min( tx1, tx2 );
-    var tmax = max( tx1, tx2 );
-    let ty1 = (bmin.y - ray.origin.y) / ray.direction.y;
-    let ty2 = (bmax.y - ray.origin.y) / ray.direction.y;
-    tmin = max( tmin, min( ty1, ty2 ) );
-    tmax = min( tmax, max( ty1, ty2 ) );
-    let tz1 = (bmin.z - ray.origin.z) / ray.direction.z;
-    let tz2 = (bmax.z - ray.origin.z) / ray.direction.z;
-    tmin = max( tmin, min( tz1, tz2 ) );
-    tmax = min( tmax, max( tz1, tz2 ) );
-    return tmax >= tmin;
-}
+    let tmin = (bmin - ray.origin) / ray.direction;
+    let tmax = (bmax - ray.origin) / ray.direction;
+    let t1 = min(tmin, tmax);
+    let t2 = max(tmin, tmax);
+    let tnear = max(max(t1.x, t1.y), t1.z);
+    let tfar = min(min(t2.x, t2.y), t2.z);
+    return tfar >= tnear;
+};
 
 fn intersect_bvh(ray: Ray, collision_list: ptr<function, array<i32, 128>>) -> i32 {
     var stack = array<i32, 64>();
@@ -245,33 +239,23 @@ fn intersect_bvh(ray: Ray, collision_list: ptr<function, array<i32, 128>>) -> i3
 
     var collision_counter = 0;
 
-    for (var i = 0; i < 100 && stack_counter > 0 && stack_counter < 64; i++) {
+    for (var i = 0; i < 200 && stack_counter > 0 && stack_counter < 64; i++) {
         stack_counter -= 1;
-        let node = bvh_nodes[stack[stack_counter]];
-        let left_node = bvh_nodes[node.left_child];
-        let right_node = bvh_nodes[node.right_child];
 
-        let left_leaf = left_node.left_child == -1 && left_node.right_child == -1;
-        let right_leaf = right_node.left_child == -1 && right_node.right_child == -1;
+        let node_id = stack[stack_counter];
+        let node = bvh_nodes[node_id];
 
-        let left_overlap = intersect_aabb(ray, left_node.aabb_min, left_node.aabb_max);
-        let right_overlap = intersect_aabb(ray, right_node.aabb_min, right_node.aabb_max);
+        let is_leaf = node.left_child == -1 && node.right_child == -1;
+        let overlap = intersect_aabb(ray, node.aabb_min, node.aabb_max);
 
-
-        if (right_overlap && right_leaf) {
-            (*collision_list)[collision_counter] = node.right_child;
-            collision_counter += 1;
-        }
-        if (left_overlap && left_leaf) {
-            (*collision_list)[collision_counter] = node.left_child;
+        if (overlap && is_leaf) {
+            (*collision_list)[collision_counter] = node_id;
             collision_counter += 1;
         }
 
-        if (left_overlap && !left_leaf) {
+        if (overlap && !is_leaf) {
             stack[stack_counter] = node.left_child;
             stack_counter += 1;
-        }
-        if (right_overlap && !right_leaf) {
             stack[stack_counter] = node.right_child;
             stack_counter += 1;
         }
