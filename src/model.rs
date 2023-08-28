@@ -130,10 +130,8 @@ pub struct Model {
 pub struct BvhNode {
     pub aabb_min: cgmath::Vector3<f32>,
     pub aabb_max: cgmath::Vector3<f32>,
-    pub left_child: i32,
-    pub right_child: i32,
-    pub first_prim: usize,
-    pub prim_count: usize,
+    pub left_first: u32,
+    pub prim_count: u32,
 }
 
 pub struct BvhData {
@@ -149,9 +147,7 @@ impl BvhData {
                 BvhNode {
                     aabb_min: cgmath::Vector3::new(0.0, 0.0, 0.0),
                     aabb_max: cgmath::Vector3::new(0.0, 0.0, 0.0),
-                    left_child: -1,
-                    right_child: -1,
-                    first_prim: 0,
+                    left_first: 0,
                     prim_count: 0,
                 };
                 2 * primitive_count + 1
@@ -177,9 +173,9 @@ impl BvhData {
             return;
         }
 
-        let bounds = (node.first_prim..(node.first_prim + node.prim_count))
+        let bounds = (node.left_first..(node.left_first + node.prim_count))
             .map(|prim_id| {
-                let triangle = triangles_indices[prim_id].map(|vertex_id| vertices[vertex_id]);
+                let triangle = triangles_indices[prim_id as usize].map(|vertex_id| vertices[vertex_id]);
                 [
                     cgmath::Vector3::new(
                         triangle
@@ -298,23 +294,23 @@ fn subdivide_bvh(
 
         let split_pos = aabb_min[axis] + extent_slice[axis] * 0.5;
 
-        i = node.first_prim;
-        j = node.first_prim + node.prim_count - 1;
+        i = node.left_first;
+        j = node.left_first + node.prim_count - 1;
 
         while i <= j {
-            let triangle = triangles_indices[i].map(|vertex_id| vertices[vertex_id]);
+            let triangle = triangles_indices[i as usize].map(|vertex_id| vertices[vertex_id]);
             let centroid: [f32; 3] = get_centroid(triangle).into();
 
             if centroid[axis] < split_pos {
                 i += 1;
             } else {
-                triangles_indices.swap(i, j);
+                triangles_indices.swap(i as usize, j as usize);
                 j -= 1;
             }
         }
     }
 
-    let left_count = i - bvh_data.nodes[node_id].first_prim;
+    let left_count = i - bvh_data.nodes[node_id].left_first;
 
     // abort split if one of the sides is empty
     if left_count == 0 || left_count == bvh_data.nodes[node_id].prim_count {
@@ -326,19 +322,17 @@ fn subdivide_bvh(
     let new_right_node_id = bvh_data.node_count;
     bvh_data.node_count += 1;
 
-    bvh_data.nodes[new_left_node_id].first_prim = bvh_data.nodes[node_id].first_prim;
+    bvh_data.nodes[new_left_node_id].left_first = bvh_data.nodes[node_id].left_first;
     bvh_data.nodes[new_left_node_id].prim_count = left_count;
 
-    bvh_data.nodes[new_right_node_id].first_prim = i;
+    bvh_data.nodes[new_right_node_id].left_first = i;
     bvh_data.nodes[new_right_node_id].prim_count = bvh_data.nodes[node_id].prim_count - left_count;
 
     bvh_data.update_bounds(new_left_node_id, triangles_indices, vertices);
     bvh_data.update_bounds(new_right_node_id, triangles_indices, vertices);
 
-    bvh_data.nodes[node_id].left_child = new_left_node_id as i32;
-    bvh_data.nodes[node_id].right_child = new_right_node_id as i32;
+    bvh_data.nodes[node_id].left_first = new_left_node_id as u32;
     bvh_data.nodes[node_id].prim_count = 0;
-    bvh_data.nodes[node_id].first_prim = 0;
 
     subdivide_bvh(bvh_data, new_left_node_id, triangles_indices, vertices);
     subdivide_bvh(bvh_data, new_right_node_id, triangles_indices, vertices);
@@ -353,8 +347,8 @@ pub fn build_bvh(
 
     bvh_data.root_id = 0;
     bvh_data.node_count = 1;
-    bvh_data.nodes[bvh_data.root_id].first_prim = 0;
-    bvh_data.nodes[bvh_data.root_id].prim_count = primitive_count;
+    bvh_data.nodes[bvh_data.root_id].left_first = 0;
+    bvh_data.nodes[bvh_data.root_id].prim_count = primitive_count as u32;
 
     bvh_data.update_bounds(0, triangles_indices, vertices);
     subdivide_bvh(&mut bvh_data, 0, triangles_indices, vertices);

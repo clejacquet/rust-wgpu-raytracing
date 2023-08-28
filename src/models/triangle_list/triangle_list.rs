@@ -42,14 +42,10 @@ struct MaterialData {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct BvhNodeData {
-    left_child: i32,
-    right_child: i32,
-    first_prim: u32,
-    prim_count: u32,
     aabb_min: [f32; 3],
-    pad0: f32,
+    left_first: u32,
     aabb_max: [f32; 3],
-    pad1: f32,
+    prim_count: u32,
 }
 
 #[repr(C)]
@@ -93,12 +89,8 @@ impl BvhNodeData {
     fn new(node: &BvhNode) -> Self {
         Self {
             aabb_min: node.aabb_min.into(),
-            pad0: 0.0,
             aabb_max: node.aabb_max.into(),
-            pad1: 0.0,
-            left_child: node.left_child,
-            right_child: node.right_child,
-            first_prim: node.first_prim as u32,
+            left_first: node.left_first,
             prim_count: node.prim_count as u32,
         }
     }

@@ -53,12 +53,10 @@ struct HitResult {
 }
 
 struct BvhNodeData {
-    left_child: i32,
-    right_child: i32,
-    first_prim: u32,
-    prim_count: u32,
     aabb_min: vec3<f32>,
+    left_first: u32,
     aabb_max: vec3<f32>,
+    prim_count: u32,
 }
 
 struct BvhMetaData {
@@ -231,10 +229,10 @@ fn intersect_aabb(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> bool {
     return tfar >= tnear;
 };
 
-fn intersect_bvh(ray: Ray, collision_list: ptr<function, array<i32, 128>>) -> i32 {
-    var stack = array<i32, 64>();
+fn intersect_bvh(ray: Ray, collision_list: ptr<function, array<u32, 128>>) -> i32 {
+    var stack = array<u32, 64>();
 
-    stack[0] = 0;
+    stack[0] = 0u;
     var stack_counter = 1;
 
     var collision_counter = 0;
@@ -245,7 +243,7 @@ fn intersect_bvh(ray: Ray, collision_list: ptr<function, array<i32, 128>>) -> i3
         let node_id = stack[stack_counter];
         let node = bvh_nodes[node_id];
 
-        let is_leaf = node.left_child == -1 && node.right_child == -1;
+        let is_leaf = node.prim_count != 0u;
         let overlap = intersect_aabb(ray, node.aabb_min, node.aabb_max);
 
         if (overlap && is_leaf) {
@@ -254,9 +252,9 @@ fn intersect_bvh(ray: Ray, collision_list: ptr<function, array<i32, 128>>) -> i3
         }
 
         if (overlap && !is_leaf) {
-            stack[stack_counter] = node.left_child;
+            stack[stack_counter] = node.left_first;
             stack_counter += 1;
-            stack[stack_counter] = node.right_child;
+            stack[stack_counter] = node.left_first + 1u;
             stack_counter += 1;
         }
     }
@@ -265,7 +263,7 @@ fn intersect_bvh(ray: Ray, collision_list: ptr<function, array<i32, 128>>) -> i3
 }
 
 fn scene_traversal_bvh(ray: Ray) -> HitResult {
-    var collision_list = array<i32, 128>();
+    var collision_list = array<u32, 128>();
     let collision_count = intersect_bvh(ray, &collision_list);
 
 
@@ -273,7 +271,7 @@ fn scene_traversal_bvh(ray: Ray) -> HitResult {
     var min_hit = kNoHit;
 
     for (var c = 0; c < collision_count; c++) {
-        let prim_start = i32(bvh_nodes[collision_list[c]].first_prim);
+        let prim_start = i32(bvh_nodes[collision_list[c]].left_first);
         let prim_end = prim_start + i32(bvh_nodes[collision_list[c]].prim_count);
 
         for (var i = prim_start; i < prim_end; i++) {
